@@ -10,12 +10,12 @@ ValueError; constraint/connection errors propagate after automatic rollback.
 import os
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from functools import cache
 from dotenv import load_dotenv
 
-from sqlalchemy import Date, DateTime, Time, cast, func, literal, select, tuple_
+from sqlalchemy import Date, DateTime, Time, cast, func, literal, or_, select, tuple_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -245,7 +245,7 @@ async def list_notifications(
     if reminder_id is not None:
         statement = statement.where(Notification.reminder_id == reminder_id)
     if pending_only:
-        statement = statement.where(Notification.sent_at.is_(None))
+        statement = statement.where(Notification.checked_at.is_(None))
     async with _session_factory()() as session:
         return list(await session.scalars(statement.order_by(Notification.scheduled_for, Notification.id)))
 
@@ -253,12 +253,16 @@ async def list_notifications(
 async def get_due_notifications(
     due_before: datetime, *, limit: int = 100,
     after: tuple[datetime, int] | None = None,
+    repeat_after: timedelta = timedelta(minutes=5),
 ) -> list[Notification]:
-    """Read pending occurrences through due_before, inclusive; does not claim delivery."""
+    """Read due unchecked occurrences whose last send is outside the repeat interval."""
     _validate_limit(limit)
     validated = Notification(scheduled_for=due_before).scheduled_for
+    if repeat_after <= timedelta(0):
+        raise ValueError("repeat_after must be positive")
     statement = select(Notification).where(
-        Notification.scheduled_for <= validated, Notification.sent_at.is_(None)
+        Notification.scheduled_for <= validated, Notification.checked_at.is_(None),
+        or_(Notification.sent_at.is_(None), Notification.sent_at <= validated - repeat_after),
     )
     if after is not None:
         statement = statement.where(tuple_(Notification.scheduled_for, Notification.id) > after)
@@ -272,7 +276,7 @@ async def update_notification(
     notification_id: int, *, user_id: int, sent_at: datetime | None,
     scheduled_for: datetime | None = None,
 ) -> Notification | None:
-    """Mark sent, or reset to pending with sent_at=None; optionally reschedule."""
+    """Set/reset the last-send timestamp and optionally reschedule; does not confirm intake."""
     async with _session_factory().begin() as session:
         notification = await _owned_notification(session, notification_id, user_id)
         if notification is not None:
@@ -315,19 +319,44 @@ async def queue_due_notifications(now: datetime, *, timezone_name: str) -> None:
 
 @asynccontextmanager
 async def notification_delivery(
-    notification_id: int,
+    notification_id: int, *, due_before: datetime,
+    repeat_after: timedelta = timedelta(minutes=5),
 ) -> AsyncIterator[tuple[Notification, Reminder, Medicine] | None]:
     """Lock one pending delivery until send/ack completes; skip other workers' locks.
 
     The caller sets notification.sent_at only after sending successfully.
     Exceptions roll back the transaction and leave the delivery pending.
     """
+    validated = Notification(scheduled_for=due_before).scheduled_for
+    if repeat_after <= timedelta(0):
+        raise ValueError("repeat_after must be positive")
     async with _session_factory().begin() as session:
         row = (await session.execute(
             select(Notification, Reminder, Medicine)
             .join(Reminder, Notification.reminder_id == Reminder.id)
             .join(Medicine, Reminder.medicine_id == Medicine.id)
-            .where(Notification.id == notification_id, Notification.sent_at.is_(None))
+            .where(
+                Notification.id == notification_id,
+                Notification.scheduled_for <= validated,
+                Notification.checked_at.is_(None),
+                or_(Notification.sent_at.is_(None), Notification.sent_at <= validated - repeat_after),
+            )
             .with_for_update(of=Notification, skip_locked=True)
         )).one_or_none()
         yield None if row is None else tuple(row)
+
+
+async def confirm_notification(
+    notification_id: int, *, user_id: int, checked_at: datetime | None = None,
+) -> Notification | None:
+    """Confirm this user's occurrence once; serialize with any in-flight send."""
+    checked_at = Notification(checked_at=checked_at or datetime.now(timezone.utc)).checked_at
+    async with _session_factory().begin() as session:
+        notification = await session.scalar(
+            select(Notification).join(Reminder).where(
+                Notification.id == notification_id, Reminder.user_id == user_id
+            ).with_for_update(of=Notification)
+        )
+        if notification is not None and notification.checked_at is None:
+            notification.checked_at = checked_at
+    return notification

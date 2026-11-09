@@ -1,4 +1,7 @@
-from datetime import datetime
+import os
+from zoneinfo import ZoneInfo
+
+from aiogram.exceptions import TelegramBadRequest
 
 from aiogram import F, Router, Dispatcher
 from aiogram import types
@@ -44,15 +47,30 @@ async def handle_me(message: types.Message):
     ])
     await message.answer(f"Select medicine to edit: ", reply_markup=mk)
 
-@router.callback_query(F.data=="profile_logged")
+@router.callback_query(F.data.regexp(r"^profile_logged(?:_[0-9]+)?$"))
 async def intake_logged(callback: types.CallbackQuery):
-    await callback.answer()
-    text = callback.message.text
-    time_now = datetime.now().strftime("%H:%M:%S")
+    if callback.data == "profile_logged":
+        await callback.answer("Use Check on the latest reminder to confirm this dose.", show_alert=True)
+        return
+    notification_id = int(callback.data.rsplit("_", 1)[-1])
+    notification = await crud.confirm_notification(notification_id, user_id=callback.from_user.id)
+    if notification is None:
+        await callback.answer("Notification not found.", show_alert=True)
+        return
+    await callback.answer("Intake confirmed. Reminders for this dose are stopped.")
+    if not isinstance(callback.message, types.Message):
+        return
+    local_time = notification.checked_at.astimezone(
+        ZoneInfo(os.getenv("REMINDER_TIMEZONE", "Europe/Moscow"))
+    ).strftime("%H:%M:%S")
+    text = (callback.message.text or "Medicine reminder").split("\n✅ Checked at ", 1)[0]
     try:
-        await callback.message.edit_text(text=f"{text} \n✅ Checked at {time_now}")
-    except Exception as e:
-        await callback.message.answer(f"Successfully checked \n{text} \nat {time_now}")
+        await callback.message.edit_text(
+            text=f"{text}\n✅ Checked at {local_time}", reply_markup=None, parse_mode=None,
+        )
+    except TelegramBadRequest:
+        # Confirmation is already saved even if an old message cannot be edited.
+        pass
 
 
 def include_profile(dp: Dispatcher):

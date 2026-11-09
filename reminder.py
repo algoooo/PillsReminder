@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 async def send_notifications(bot: Bot, *, now: datetime | None = None) -> int:
-    """Send pending notifications in batches, returning the number acknowledged."""
+    """Send/repeat unchecked occurrences at five-minute intervals; return send count."""
     now = now if now is not None else datetime.now(timezone.utc)
     sent = 0
     after = None
@@ -32,13 +32,13 @@ async def send_notifications(bot: Bot, *, now: datetime | None = None) -> int:
             return sent
         for notification in pending:
             try:
-                async with crud.notification_delivery(notification.id) as delivery:
+                async with crud.notification_delivery(notification.id, due_before=now) as delivery:
                     if delivery is None:
                         continue
                     record, reminder, medicine = delivery
                     mk = InlineKeyboardMarkup(inline_keyboard=[
                         [
-                            InlineKeyboardButton(text="✅ I have taken", callback_data="profile_logged")
+                            InlineKeyboardButton(text="✅ I have taken", callback_data=f"profile_logged_{record.id}")
                         ]
                     ])
                     await bot.send_message(
@@ -47,7 +47,7 @@ async def send_notifications(bot: Bot, *, now: datetime | None = None) -> int:
                         parse_mode=None,
                         reply_markup=mk,
                     )
-                    record.sent_at = datetime.now(timezone.utc)
+                    record.sent_at = now
                 sent += 1
             except TelegramRetryAfter:
                 # Respect Telegram's cooldown before making any further requests.

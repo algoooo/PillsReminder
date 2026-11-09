@@ -63,9 +63,25 @@ def _migrate_reminder_time(connection: Connection) -> None:
         ))
 
 
+def _migrate_notification_confirmation(connection: Connection) -> None:
+    inspector = inspect(connection)
+    if not inspector.has_table("notifications"):
+        return
+    if "checked_at" in {c["name"] for c in inspector.get_columns("notifications")}:
+        return
+    schema = connection.scalar(text(
+        "SELECT n.nspname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+        "WHERE c.oid = to_regclass('notifications')"
+    ))
+    quote = connection.dialect.identifier_preparer.quote
+    table = f"{quote(schema)}.{quote('notifications')}"
+    connection.execute(text(f"ALTER TABLE {table} ADD COLUMN checked_at TIMESTAMP WITH TIME ZONE"))
+
+
 async def initialize_tables(engine: AsyncEngine) -> None:
     """Preserve legacy user data and create missing tables in one transaction."""
     async with engine.begin() as connection:
         await connection.run_sync(_migrate_legacy_users)
         await connection.run_sync(_migrate_reminder_time)
+        await connection.run_sync(_migrate_notification_confirmation)
         await connection.run_sync(Base.metadata.create_all)

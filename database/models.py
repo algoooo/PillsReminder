@@ -112,12 +112,13 @@ class Notification(Base):
     reminder_id: Mapped[int] = mapped_column(ForeignKey("reminders.id"), index=True)
     scheduled_for: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     reminder: Mapped[Reminder] = relationship(back_populates="notifications")
 
-    @validates("scheduled_for", "sent_at")
+    @validates("scheduled_for", "sent_at", "checked_at")
     def validate_timestamp(self, key: str, value: datetime | None) -> datetime | None:
-        if value is None and key == "sent_at":
+        if value is None and key in {"sent_at", "checked_at"}:
             return None
         if not isinstance(value, datetime) or value.utcoffset() is None:
             raise ValueError(f"{key} must be a timezone-aware datetime")

@@ -197,7 +197,7 @@ class CrudTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(await crud.list_notifications(self.user.id, reminder_id=reminder.id, pending_only=True)), 1)
         updated = await crud.update_notification(notification.id, user_id=self.user.id, sent_at=self.now)
         self.assertEqual(updated.sent_at, self.now)
-        self.assertEqual(await crud.list_notifications(self.user.id, pending_only=True), [])
+        self.assertEqual(len(await crud.list_notifications(self.user.id, pending_only=True)), 1)
         self.assertEqual(await crud.get_due_notifications(self.now), [])
         updated = await crud.update_notification(notification.id, user_id=self.user.id, sent_at=None, scheduled_for=self.now + timedelta(days=1))
         self.assertIsNone(updated.sent_at)
@@ -277,6 +277,8 @@ class CrudTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bot.send_message.call_args.kwargs["chat_id"], self.user.id)
         self.assertIn("Tablet", bot.send_message.call_args.kwargs["text"])
         self.assertIn(reminder.text, bot.send_message.call_args.kwargs["text"])
+        notification = (await crud.list_notifications(self.user.id))[0]
+        await crud.confirm_notification(notification.id, user_id=self.user.id, checked_at=self.now)
         self.assertEqual(await poll_reminders(bot, now=self.now + timedelta(days=1), timezone_name="Europe/Moscow"), 1)
         self.assertEqual(len(await crud.list_notifications(self.user.id)), 2)
 
@@ -328,6 +330,67 @@ class CrudTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await send_notifications(bot, now=self.now), 100)
         self.assertEqual(bot.send_message.await_count, 101)
         self.assertEqual([n.id for n in await crud.get_due_notifications(self.now)], [notifications[0].id])
+
+    async def test_notifications_repeat_until_checked(self):
+        from reminder import poll_reminders
+        await self.reminder(remind_time="15:00")
+        bot = AsyncMock()
+        self.assertEqual(await poll_reminders(bot, now=self.now, timezone_name="Europe/Moscow"), 1)
+        notification = (await crud.list_notifications(self.user.id))[0]
+        button = bot.send_message.call_args.kwargs["reply_markup"].inline_keyboard[0][0]
+        self.assertEqual(button.callback_data, f"profile_logged_{notification.id}")
+        self.assertEqual(await poll_reminders(bot, now=self.now + timedelta(minutes=4, seconds=59), timezone_name="Europe/Moscow"), 0)
+        await crud.close_db()  # Repeat timing survives worker restarts.
+        self.assertEqual(await poll_reminders(bot, now=self.now + timedelta(minutes=5), timezone_name="Europe/Moscow"), 1)
+        self.assertEqual(await poll_reminders(bot, now=self.now + timedelta(minutes=10), timezone_name="Europe/Moscow"), 1)
+        checked = await crud.confirm_notification(notification.id, user_id=self.user.id, checked_at=self.now + timedelta(minutes=11))
+        self.assertEqual(checked.checked_at, self.now + timedelta(minutes=11))
+        self.assertEqual(await poll_reminders(bot, now=self.now + timedelta(minutes=20), timezone_name="Europe/Moscow"), 0)
+        self.assertEqual(await crud.list_notifications(self.user.id, pending_only=True), [])
+        self.assertEqual(await poll_reminders(bot, now=self.now + timedelta(days=1), timezone_name="Europe/Moscow"), 1)
+
+    async def test_confirmation_ownership_and_idempotence(self):
+        reminder = await self.reminder()
+        notification = await crud.create_notification(self.user.id, reminder.id, self.now)
+        self.assertIsNone(await crud.confirm_notification(notification.id, user_id=self.other.id))
+        self.assertIsNone(await crud.confirm_notification(999, user_id=self.user.id))
+        checked = await crud.confirm_notification(notification.id, user_id=self.user.id, checked_at=self.now)
+        duplicate = await crud.confirm_notification(notification.id, user_id=self.user.id, checked_at=self.now + timedelta(hours=1))
+        self.assertEqual(duplicate.checked_at, checked.checked_at)
+        self.assertEqual(await crud.get_due_notifications(self.now + timedelta(days=1)), [])
+
+    async def test_confirmation_serializes_with_delivery(self):
+        from reminder import send_notifications
+        reminder = await self.reminder()
+        notification = await crud.create_notification(self.user.id, reminder.id, self.now)
+        started = asyncio.Event()
+        release = asyncio.Event()
+        bot = AsyncMock()
+        async def send(**kwargs):
+            started.set()
+            await release.wait()
+        bot.send_message.side_effect = send
+        sending = asyncio.create_task(send_notifications(bot, now=self.now))
+        await asyncio.wait_for(started.wait(), timeout=5)
+        confirmation = asyncio.create_task(crud.confirm_notification(notification.id, user_id=self.user.id, checked_at=self.now))
+        release.set()
+        self.assertEqual(await asyncio.wait_for(sending, timeout=5), 1)
+        self.assertIsNotNone((await asyncio.wait_for(confirmation, timeout=5)).checked_at)
+        self.assertEqual(await send_notifications(bot, now=self.now + timedelta(minutes=10)), 0)
+        bot.send_message.assert_awaited_once()
+
+    async def test_confirmation_migration_preserves_notifications(self):
+        reminder = await self.reminder()
+        notification = await crud.create_notification(self.user.id, reminder.id, self.now)
+        await crud.update_notification(notification.id, user_id=self.user.id, sent_at=self.now)
+        async with crud._session_factory().kw["bind"].begin() as connection:
+            await connection.execute(text("ALTER TABLE notifications DROP COLUMN checked_at"))
+        await crud.init_db()
+        await crud.init_db()
+        loaded = await crud.get_notification(notification.id, user_id=self.user.id)
+        self.assertEqual(loaded.sent_at, self.now)
+        self.assertIsNone(loaded.checked_at)
+        self.assertEqual([n.id for n in await crud.get_due_notifications(self.now + timedelta(minutes=5))], [notification.id])
 
     async def test_concurrent_calls_use_independent_sessions(self):
         medicines = await asyncio.gather(*[
