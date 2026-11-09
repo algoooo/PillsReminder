@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramRetryAfter
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from database import crud
 
@@ -35,10 +36,16 @@ async def send_notifications(bot: Bot, *, now: datetime | None = None) -> int:
                     if delivery is None:
                         continue
                     record, reminder, medicine = delivery
+                    mk = InlineKeyboardMarkup(inline_keyboard=[
+                        [
+                            InlineKeyboardButton(text="✅ I have taken", callback_data="profile_logged")
+                        ]
+                    ])
                     await bot.send_message(
                         chat_id=reminder.user_id,
-                        text=f"Time to take {medicine.name} ({reminder.remind_time})\n{reminder.text}",
+                        text=f"🕒 Time to take {medicine.name} ({reminder.remind_time})\n{reminder.text}",
                         parse_mode=None,
+                        reply_markup=mk,
                     )
                     record.sent_at = datetime.now(timezone.utc)
                 sent += 1

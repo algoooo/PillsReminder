@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from aiogram import F, Router, Dispatcher
 from aiogram import types
 from aiogram.filters import Command
@@ -41,6 +43,17 @@ async def handle_me(message: types.Message):
         InlineKeyboardButton(text="💊 Add Medicine", callback_data="medicine_add")
     ])
     await message.answer(f"Select medicine to edit: ", reply_markup=mk)
+
+@router.callback_query(F.data=="profile_logged")
+async def intake_logged(callback: types.CallbackQuery):
+    await callback.answer()
+    text = callback.message.text
+    time_now = datetime.now().strftime("%H:%M:%S")
+    try:
+        await callback.message.edit_text(text=f"{text} \n✅ Checked at {time_now}")
+    except Exception as e:
+        await callback.message.answer(f"Successfully checked \n{text} \nat {time_now}")
+
 
 def include_profile(dp: Dispatcher):
     dp.include_router(router)

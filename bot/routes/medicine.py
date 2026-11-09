@@ -1,11 +1,11 @@
-from aiogram import dispatcher, Router, F, Dispatcher
+from aiogram import Router, F, Dispatcher
 from aiogram import types
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from database import crud
 from database.models import Medicine, Reminder, User
-
+from bot.routes.profile import handle_me
 
 class Adding_medicine(StatesGroup):
     get_name = State()
@@ -19,6 +19,8 @@ async def handle_medicine_manage(callback: types.CallbackQuery):
     medicine_id = int(callback.data.split("_")[-1])
 
     medicine: Medicine | None = await crud.get_medicine(medicine_id=medicine_id, user_id=callback.from_user.id)
+
+    await callback.answer()
 
     if medicine is None:
         await callback.answer("Incorrect option")
@@ -46,7 +48,7 @@ async def handle_medicine_manage(callback: types.CallbackQuery):
         mk.inline_keyboard.append([
             InlineKeyboardButton(text=f"{r_time}", callback_data=f"reminder_manage_{r_id}")
         ])
-    mk.inline_keyboard.append([InlineKeyboardButton(text='Add reminder', callback_data=f"reminder_add_{medicine_id}")])
+    mk.inline_keyboard.append([InlineKeyboardButton(text='🔔 Add reminder', callback_data=f"reminder_add_{medicine_id}")])
     mk.inline_keyboard.append([InlineKeyboardButton(
             text="❌ Delete medicine",
             callback_data=f"medicine_delete_{medicine.id}")]
@@ -62,6 +64,7 @@ async def handle_medicine_delete(callback: types.CallbackQuery):
     if medicine is None:
         await callback.answer("Incorrect option")
         return
+    await callback.answer()
     await crud.delete_medicine(medicine_id=medicine_id, user_id=callback.from_user.id)
     await callback.answer()
     await callback.message.answer("Deleted")
@@ -73,6 +76,7 @@ async def handle_medicine_add(callback: types.CallbackQuery, state: FSMContext):
     if user is None:
         await callback.answer("Incorrect option")
         return
+    await callback.answer()
     await state.clear()
     await state.set_state(Adding_medicine.get_name)
     await callback.answer()
@@ -106,7 +110,7 @@ async def handle_medicine_add_get_amount(message: types.Message, state: FSMConte
     await crud.create_medicine(message.from_user.id, data["name"], data["amount"])
     await message.answer(f"🆕 Added {data['name']}")
     await state.clear()
-    return
+    return await handle_me(message)
 
 def include_medicine(dp: Dispatcher):
     dp.include_router(router)

@@ -3,6 +3,8 @@ from aiogram import types
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+from bot.routes.profile import handle_me
 from database import crud
 from database.models import Medicine
 
@@ -18,9 +20,10 @@ async def handle_add_reminder(callback: types.CallbackQuery, state: FSMContext):
     if user is None:
         await callback.answer("Incorrect user")
         return
+    await callback.answer()
     medicine_id = int(callback.data.split("_")[-1])
     await state.set_state(Remind_date.get_date)
-    await callback.message.answer("Enter time in format HH:MM")
+    await callback.message.answer("🕒 Enter time in format HH:MM")
     await state.update_data({"medicine_id": medicine_id})
 
 @router.message(Remind_date.get_date)
@@ -38,7 +41,8 @@ async def handle_add_reminder_get_date(message: types.Message, state: FSMContext
         await message.answer("Enter a valid time in HH:MM format for an existing medicine.")
         return
     await state.clear()
-    await message.answer("Reminder added.")
+    await message.answer("✅ Reminder added")
+    return await handle_me(message)
 
 
 
@@ -54,6 +58,7 @@ async def handle_reminder_manage(callback: types.CallbackQuery):
     if reminder is None:
         await callback.answer("Incorrect reminder")
         return
+    await callback.answer()
     time_remind = reminder.remind_time
     message = f"Reminder set at {time_remind}"
     mk = InlineKeyboardMarkup(inline_keyboard=[
