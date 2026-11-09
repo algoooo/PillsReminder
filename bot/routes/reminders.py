@@ -30,7 +30,7 @@ async def handle_add_reminder_get_date(message: types.Message, state: FSMContext
     medicine_id = int(data.get("medicine_id", "-100000"))
     if user is None:
         await state.clear()
-        await message.answer("Send me to register first.")
+        await message.answer("Send /me to register first.")
         return
     try:
         await crud.create_reminder(user.id, medicine_id, "Medicine reminder", message.text)
@@ -55,10 +55,10 @@ async def handle_reminder_manage(callback: types.CallbackQuery):
         await callback.answer("Incorrect reminder")
         return
     time_remind = reminder.remind_time
-    message = f"Reminder set at: {time_remind}"
+    message = f"Reminder set at {time_remind}"
     mk = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="Delete reminder", callback_data=f"reminder_delete_{reminder.id}")
+            InlineKeyboardButton(text="❌ Delete reminder", callback_data=f"reminder_delete_{reminder.id}")
         ]
     ])
     await callback.answer()

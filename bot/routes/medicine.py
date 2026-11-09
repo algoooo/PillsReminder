@@ -29,19 +29,18 @@ async def handle_medicine_manage(callback: types.CallbackQuery):
         if reminder.medicine_id == medicine_id
     ]
 
-    reminders_str = "Reminders are set at: \n"
+    reminders_str = "📅 Reminders are set at: \n"
     reminders_Id_time = dict()
     if not reminders:
         reminders_str = ""
     else:
         for reminder in reminders:
             formatted_time = reminder.remind_time
-            reminders_str += formatted_time + "\n"
             reminders_Id_time.update({
                 reminder.id: formatted_time
             })
 
-    message = f"Your medicine {medicine.name}: \nAmount: {medicine.amount} \n{reminders_str}"
+    message = f"💊 Your medicine - {medicine.name}. \n➕ Amount per intake: {medicine.amount} \n{reminders_str}"
     mk = InlineKeyboardMarkup(inline_keyboard=[])
     for r_id, r_time in reminders_Id_time.items():
         mk.inline_keyboard.append([
@@ -49,7 +48,7 @@ async def handle_medicine_manage(callback: types.CallbackQuery):
         ])
     mk.inline_keyboard.append([InlineKeyboardButton(text='Add reminder', callback_data=f"reminder_add_{medicine_id}")])
     mk.inline_keyboard.append([InlineKeyboardButton(
-            text="DELETE MEDICINE",
+            text="❌ Delete medicine",
             callback_data=f"medicine_delete_{medicine.id}")]
         )
     await callback.answer()
@@ -65,7 +64,7 @@ async def handle_medicine_delete(callback: types.CallbackQuery):
         return
     await crud.delete_medicine(medicine_id=medicine_id, user_id=callback.from_user.id)
     await callback.answer()
-    await callback.message.answer("Deleted.")
+    await callback.message.answer("Deleted")
     return
 
 @router.callback_query(F.data=="medicine_add")
@@ -77,18 +76,18 @@ async def handle_medicine_add(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
     await state.set_state(Adding_medicine.get_name)
     await callback.answer()
-    await callback.message.answer("Enter the medicine name:")
+    await callback.message.answer("🖋️ Enter the medicine name:")
 
 @router.message(Adding_medicine.get_name)
 async def handle_medicine_add_get_name(message: types.Message, state: FSMContext):
     if not message.text or not message.text.strip() or len(message.text.strip()) > 255:
-        await message.answer("Enter a medicine name between 1 and 255 characters.")
+        await message.answer("🖋️ Enter a medicine name between 1 and 255 characters.")
         return
     await state.update_data({
         "name": message.text
     })
     await state.set_state(Adding_medicine.get_amount)
-    await message.answer("Enter the amount:")
+    await message.answer("🖋️ Enter the amount (in mg, per one intake):")
 
 
 @router.message(Adding_medicine.get_amount)
@@ -98,14 +97,14 @@ async def handle_medicine_add_get_amount(message: types.Message, state: FSMConte
         if amount < 0 or amount > 2_147_483_647:
             raise ValueError
     except (TypeError, ValueError):
-        await message.answer("Enter a whole number between 0 and 2147483647.")
+        await message.answer("🖋️ Enter a whole number between 0 and 2147483647.")
         return
     await state.update_data({
         "amount": amount
     })
     data = await state.get_data()
     await crud.create_medicine(message.from_user.id, data["name"], data["amount"])
-    await message.answer(f"Added {data['name']}")
+    await message.answer(f"🆕 Added {data['name']}")
     await state.clear()
     return
 
